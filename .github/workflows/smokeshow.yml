@@ -1,9 +1,7 @@
 name: Smokeshow
 
 on:
-  workflow_run: # zizmor: ignore[dangerous-triggers]
-    workflows: [Test Backend]
-    types: [completed]
+  workflow_dispatch:
 
 permissions: {}
 

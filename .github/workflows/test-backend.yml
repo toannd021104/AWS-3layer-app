@@ -38,15 +38,9 @@ jobs:
         run: uv run bash scripts/prestart.sh
         working-directory: backend
       - name: Run tests
-        run: uv run bash scripts/tests-start.sh "Coverage for ${{ github.sha }}"
+        run: uv run coverage run -m pytest tests/
         working-directory: backend
       - run: docker compose down -v --remove-orphans
-      - name: Store coverage files
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
-        with:
-          name: coverage-html
-          path: backend/htmlcov
-          include-hidden-files: true
       - name: Coverage report
         run: uv run coverage report --fail-under=90
         working-directory: backend
