@@ -218,6 +218,30 @@ Frontend docs: [frontend/README.md](./frontend/README.md).
 
 Deployment docs: [deployment.md](./deployment.md).
 
+## AWS ECS Business Deployment
+
+This repository includes an AWS container platform under
+[`infra/aws/ecs`](./infra/aws/ecs):
+
+- ECS Fargate for frontend and backend containers in private subnets
+- RDS PostgreSQL in private subnets
+- public frontend ALB with AWS WAF
+- API Gateway HTTP API with AWS WAF and VPC Link to an internal backend ALB
+- ECR, Secrets Manager, CloudWatch Logs, autoscaling, and GitHub OIDC
+- GitHub Actions deployment workflow in
+  [`.github/workflows/deploy-aws-ecs.yml`](./.github/workflows/deploy-aws-ecs.yml)
+
+Architecture notes: [`docs/aws-ecs-architecture.md`](./docs/aws-ecs-architecture.md).
+
+### Local URLs
+
+After `docker compose up -d --wait backend frontend adminer mailcatcher`:
+
+- Frontend: <http://localhost:5173>
+- Backend health: <http://localhost:8000/api/v1/utils/health-check/>
+- Adminer: <http://localhost:8080>
+- Mailcatcher: <http://localhost:1080>
+
 ## Development
 
 General development docs: [development.md](./development.md).
