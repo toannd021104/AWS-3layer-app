@@ -9,6 +9,18 @@ data "aws_availability_zones" "available" {
 
 data "aws_caller_identity" "current" {}
 
+data "aws_subnet" "existing_public" {
+  for_each = toset(local.create_network ? [] : var.existing_public_subnet_ids)
+
+  id = each.value
+}
+
+data "aws_subnet" "existing_private" {
+  for_each = toset(local.create_network ? [] : var.existing_private_subnet_ids)
+
+  id = each.value
+}
+
 data "aws_iam_policy_document" "ecs_tasks_assume_role" {
   statement {
     actions = ["sts:AssumeRole"]
@@ -23,6 +35,7 @@ data "aws_iam_policy_document" "ecs_tasks_assume_role" {
 locals {
   name           = "${var.project_name}-${var.environment}"
   create_network = var.existing_vpc_id == ""
+  workspace_name = replace(terraform.workspace, "/[^A-Za-z0-9+=,.@_-]/", "-")
 
   common_tags = merge(
     {
@@ -38,7 +51,23 @@ locals {
   vpc_id             = local.create_network ? aws_vpc.this[0].id : var.existing_vpc_id
   public_subnet_ids  = local.create_network ? aws_subnet.public[*].id : var.existing_public_subnet_ids
   private_subnet_ids = local.create_network ? aws_subnet.private[*].id : var.existing_private_subnet_ids
-  iam_name_prefix    = "${local.name}-${var.aws_region}"
+  private_subnet_cidr_blocks = local.create_network ? var.private_subnet_cidr_blocks : [
+    for subnet in data.aws_subnet.existing_private : subnet.cidr_block
+  ]
+  iam_name_prefix = "${local.name}-${var.aws_region}-${local.workspace_name}"
+
+  existing_subnet_azs = concat(
+    [for subnet in data.aws_subnet.existing_public : subnet.availability_zone],
+    [for subnet in data.aws_subnet.existing_private : subnet.availability_zone]
+  )
+
+  existing_subnets_are_regional = alltrue([
+    for az in local.existing_subnet_azs : contains(data.aws_availability_zones.available.names, az)
+  ])
+
+  github_oidc_provider_arn = var.github_oidc_provider_arn != "" ? var.github_oidc_provider_arn : (
+    var.create_github_oidc_role && var.github_repository != "" ? aws_iam_openid_connect_provider.github[0].arn : ""
+  )
 
   backend_secret_keys = [
     "DOMAIN",
@@ -62,8 +91,9 @@ locals {
 }
 
 resource "random_password" "postgres" {
-  length  = 32
-  special = true
+  length           = 32
+  special          = true
+  override_special = "!#$%&*()-_=+[]{}<>:?"
 }
 
 resource "random_password" "first_superuser" {
@@ -226,6 +256,13 @@ resource "aws_security_group" "frontend_alb" {
   tags = merge(local.common_tags, {
     Name = "${local.name}-frontend-alb-sg"
   })
+
+  lifecycle {
+    precondition {
+      condition     = local.create_network || local.existing_subnets_are_regional
+      error_message = "Existing subnet IDs must be in main regional Availability Zones, not Local Zones."
+    }
+  }
 }
 
 resource "aws_security_group" "api_gateway_link" {
@@ -304,11 +341,11 @@ resource "aws_security_group" "backend" {
   vpc_id      = local.vpc_id
 
   ingress {
-    description     = "Backend from internal ALB"
-    from_port       = 8000
-    to_port         = 8000
-    protocol        = "tcp"
-    security_groups = [aws_security_group.backend_alb.id]
+    description = "Backend from private VPC link subnets"
+    from_port   = 8000
+    to_port     = 8000
+    protocol    = "tcp"
+    cidr_blocks = local.private_subnet_cidr_blocks
   }
 
   egress {
@@ -529,8 +566,7 @@ resource "aws_lb" "frontend" {
 resource "aws_lb" "backend" {
   name               = "${local.name}-backend"
   internal           = true
-  load_balancer_type = "application"
-  security_groups    = [aws_security_group.backend_alb.id]
+  load_balancer_type = "network"
   subnets            = local.private_subnet_ids
 
   tags = local.common_tags
@@ -559,7 +595,7 @@ resource "aws_lb_target_group" "frontend" {
 resource "aws_lb_target_group" "backend" {
   name        = "${local.name}-backend"
   port        = 8000
-  protocol    = "HTTP"
+  protocol    = "TCP"
   target_type = "ip"
   vpc_id      = local.vpc_id
 
@@ -569,6 +605,7 @@ resource "aws_lb_target_group" "backend" {
     interval            = 30
     matcher             = "200-399"
     path                = "/api/v1/utils/health-check/"
+    protocol            = "HTTP"
     timeout             = 5
     unhealthy_threshold = 3
   }
@@ -625,7 +662,7 @@ resource "aws_lb_listener" "https" {
 resource "aws_lb_listener" "backend" {
   load_balancer_arn = aws_lb.backend.arn
   port              = 8000
-  protocol          = "HTTP"
+  protocol          = "TCP"
 
   default_action {
     type             = "forward"
@@ -633,70 +670,103 @@ resource "aws_lb_listener" "backend" {
   }
 }
 
-resource "aws_apigatewayv2_vpc_link" "backend" {
-  name               = "${local.name}-backend"
-  security_group_ids = [aws_security_group.api_gateway_link.id]
-  subnet_ids         = local.private_subnet_ids
+resource "aws_api_gateway_vpc_link" "backend" {
+  name        = "${local.name}-backend"
+  target_arns = [aws_lb.backend.arn]
 
   tags = local.common_tags
 }
 
-resource "aws_apigatewayv2_api" "backend" {
-  name          = "${local.name}-api"
-  protocol_type = "HTTP"
+resource "aws_api_gateway_rest_api" "backend" {
+  name = "${local.name}-api"
 
-  cors_configuration {
-    allow_credentials = false
-    allow_headers     = ["authorization", "content-type"]
-    allow_methods     = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
-    allow_origins     = [local.frontend_origin]
-    max_age           = 3600
+  endpoint_configuration {
+    types = ["REGIONAL"]
   }
 
   tags = local.common_tags
 }
 
-resource "aws_apigatewayv2_integration" "backend" {
-  api_id             = aws_apigatewayv2_api.backend.id
-  connection_id      = aws_apigatewayv2_vpc_link.backend.id
-  connection_type    = "VPC_LINK"
-  integration_method = "ANY"
-  integration_type   = "HTTP_PROXY"
-  integration_uri    = aws_lb_listener.backend.arn
+resource "aws_api_gateway_resource" "backend_proxy" {
+  rest_api_id = aws_api_gateway_rest_api.backend.id
+  parent_id   = aws_api_gateway_rest_api.backend.root_resource_id
+  path_part   = "{proxy+}"
 }
 
-resource "aws_apigatewayv2_route" "backend_default" {
-  api_id    = aws_apigatewayv2_api.backend.id
-  route_key = "$default"
-  target    = "integrations/${aws_apigatewayv2_integration.backend.id}"
+resource "aws_api_gateway_method" "backend_root" {
+  rest_api_id   = aws_api_gateway_rest_api.backend.id
+  resource_id   = aws_api_gateway_rest_api.backend.root_resource_id
+  http_method   = "ANY"
+  authorization = "NONE"
 }
 
-resource "aws_apigatewayv2_stage" "default" {
-  api_id      = aws_apigatewayv2_api.backend.id
-  name        = "$default"
-  auto_deploy = true
+resource "aws_api_gateway_method" "backend_proxy" {
+  rest_api_id   = aws_api_gateway_rest_api.backend.id
+  resource_id   = aws_api_gateway_resource.backend_proxy.id
+  http_method   = "ANY"
+  authorization = "NONE"
 
-  access_log_settings {
-    destination_arn = aws_cloudwatch_log_group.api_gateway.arn
-    format = jsonencode({
-      requestId      = "$context.requestId"
-      ip             = "$context.identity.sourceIp"
-      requestTime    = "$context.requestTime"
-      httpMethod     = "$context.httpMethod"
-      routeKey       = "$context.routeKey"
-      status         = "$context.status"
-      protocol       = "$context.protocol"
-      responseLength = "$context.responseLength"
-      integrationErr = "$context.integrationErrorMessage"
-    })
+  request_parameters = {
+    "method.request.path.proxy" = true
+  }
+}
+
+resource "aws_api_gateway_integration" "backend_root" {
+  rest_api_id             = aws_api_gateway_rest_api.backend.id
+  resource_id             = aws_api_gateway_rest_api.backend.root_resource_id
+  http_method             = aws_api_gateway_method.backend_root.http_method
+  integration_http_method = "ANY"
+  type                    = "HTTP_PROXY"
+  uri                     = "http://${aws_lb.backend.dns_name}:8000/"
+  connection_type         = "VPC_LINK"
+  connection_id           = aws_api_gateway_vpc_link.backend.id
+}
+
+resource "aws_api_gateway_integration" "backend_proxy" {
+  rest_api_id             = aws_api_gateway_rest_api.backend.id
+  resource_id             = aws_api_gateway_resource.backend_proxy.id
+  http_method             = aws_api_gateway_method.backend_proxy.http_method
+  integration_http_method = "ANY"
+  type                    = "HTTP_PROXY"
+  uri                     = "http://${aws_lb.backend.dns_name}:8000/{proxy}"
+  connection_type         = "VPC_LINK"
+  connection_id           = aws_api_gateway_vpc_link.backend.id
+
+  request_parameters = {
+    "integration.request.path.proxy" = "method.request.path.proxy"
+  }
+}
+
+resource "aws_api_gateway_deployment" "backend" {
+  rest_api_id = aws_api_gateway_rest_api.backend.id
+
+  triggers = {
+    redeployment = sha1(jsonencode([
+      aws_api_gateway_resource.backend_proxy.id,
+      aws_api_gateway_method.backend_root.id,
+      aws_api_gateway_method.backend_proxy.id,
+      aws_api_gateway_integration.backend_root.id,
+      aws_api_gateway_integration.backend_proxy.id
+    ]))
   }
 
-  default_route_settings {
-    throttling_burst_limit = var.api_throttle_burst_limit
-    throttling_rate_limit  = var.api_throttle_rate_limit
+  lifecycle {
+    create_before_destroy = true
   }
 
-  tags = local.common_tags
+  depends_on = [
+    aws_api_gateway_integration.backend_root,
+    aws_api_gateway_integration.backend_proxy
+  ]
+}
+
+resource "aws_api_gateway_stage" "default" {
+  rest_api_id   = aws_api_gateway_rest_api.backend.id
+  deployment_id = aws_api_gateway_deployment.backend.id
+  stage_name    = var.environment
+
+  xray_tracing_enabled = true
+  tags                 = local.common_tags
 }
 
 resource "aws_wafv2_web_acl" "frontend" {
@@ -871,7 +941,7 @@ resource "aws_wafv2_web_acl_association" "frontend_alb" {
 }
 
 resource "aws_wafv2_web_acl_association" "api_gateway" {
-  resource_arn = aws_apigatewayv2_stage.default.arn
+  resource_arn = aws_api_gateway_stage.default.arn
   web_acl_arn  = aws_wafv2_web_acl.api.arn
 }
 
@@ -1075,7 +1145,7 @@ data "aws_iam_policy_document" "github_oidc_assume_role" {
 
     principals {
       type        = "Federated"
-      identifiers = [aws_iam_openid_connect_provider.github[0].arn]
+      identifiers = [local.github_oidc_provider_arn]
     }
 
     condition {
@@ -1093,7 +1163,7 @@ data "aws_iam_policy_document" "github_oidc_assume_role" {
 }
 
 resource "aws_iam_openid_connect_provider" "github" {
-  count = var.create_github_oidc_role && var.github_repository != "" ? 1 : 0
+  count = var.create_github_oidc_role && var.github_repository != "" && var.github_oidc_provider_arn == "" ? 1 : 0
 
   url             = "https://token.actions.githubusercontent.com"
   client_id_list  = ["sts.amazonaws.com"]
@@ -1105,7 +1175,7 @@ resource "aws_iam_openid_connect_provider" "github" {
 resource "aws_iam_role" "github_deploy" {
   count = var.create_github_oidc_role && var.github_repository != "" ? 1 : 0
 
-  name               = "${local.name}-github-deploy"
+  name               = "${local.iam_name_prefix}-github-deploy"
   assume_role_policy = data.aws_iam_policy_document.github_oidc_assume_role[0].json
 
   tags = local.common_tags

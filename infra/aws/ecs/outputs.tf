@@ -10,12 +10,27 @@ output "frontend_alb_dns_name" {
 
 output "api_gateway_url" {
   description = "Public API Gateway invoke URL."
-  value       = aws_apigatewayv2_stage.default.invoke_url
+  value       = aws_api_gateway_stage.default.invoke_url
 }
 
 output "backend_internal_alb_dns_name" {
-  description = "Internal backend ALB DNS name."
+  description = "Internal backend load balancer DNS name."
   value       = aws_lb.backend.dns_name
+}
+
+output "private_subnet_ids" {
+  description = "Private subnet IDs used by ECS tasks."
+  value       = local.private_subnet_ids
+}
+
+output "backend_security_group_id" {
+  description = "Backend ECS service security group ID."
+  value       = aws_security_group.backend.id
+}
+
+output "backend_task_definition_arn" {
+  description = "Backend ECS task definition ARN."
+  value       = aws_ecs_task_definition.backend.arn
 }
 
 output "backend_ecr_repository_url" {

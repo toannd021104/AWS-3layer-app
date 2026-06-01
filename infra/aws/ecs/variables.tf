@@ -267,6 +267,12 @@ variable "create_github_oidc_role" {
   default     = true
 }
 
+variable "github_oidc_provider_arn" {
+  description = "Existing account-level GitHub Actions OIDC provider ARN. Leave empty to create it from this stack."
+  type        = string
+  default     = ""
+}
+
 variable "tags" {
   description = "Additional tags to apply to resources."
   type        = map(string)
