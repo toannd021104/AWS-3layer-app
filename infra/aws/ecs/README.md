@@ -22,7 +22,7 @@ terraform apply
 
 For GitHub Actions, create repository variables:
 
-- `AWS_REGION`: for example `ap-southeast-1`
+- `AWS_REGION`: for example `ap-southeast-2`
 - `AWS_ROLE_ARN`: output `github_deploy_role_arn`
 - `TF_PROJECT_NAME`: for example `fastapi-ecs`
 - `TF_ENVIRONMENT`: for example `dev`

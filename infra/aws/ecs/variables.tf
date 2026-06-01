@@ -1,7 +1,7 @@
 variable "aws_region" {
   description = "AWS region for the ECS stack."
   type        = string
-  default     = "ap-southeast-1"
+  default     = "ap-southeast-2"
 }
 
 variable "project_name" {
@@ -178,7 +178,7 @@ variable "postgres_user" {
 variable "postgres_engine_version" {
   description = "RDS PostgreSQL engine version."
   type        = string
-  default     = "16.3"
+  default     = "16.14"
 }
 
 variable "postgres_instance_class" {
