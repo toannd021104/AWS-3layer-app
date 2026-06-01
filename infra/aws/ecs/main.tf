@@ -292,10 +292,7 @@ resource "aws_security_group" "backend" {
     from_port       = 8000
     to_port         = 8000
     protocol        = "tcp"
-    security_groups = [
-      aws_security_group.frontend_alb.id,
-      aws_security_group.backend_alb.id
-    ]
+    security_groups = [aws_security_group.backend_alb.id]
   }
 
   egress {
@@ -376,6 +373,13 @@ resource "aws_cloudwatch_log_group" "backend" {
 
 resource "aws_cloudwatch_log_group" "frontend" {
   name              = "/ecs/${local.name}/frontend"
+  retention_in_days = 30
+
+  tags = local.common_tags
+}
+
+resource "aws_cloudwatch_log_group" "api_gateway" {
+  name              = "/aws/apigateway/${local.name}"
   retention_in_days = 30
 
   tags = local.common_tags
@@ -613,42 +617,6 @@ resource "aws_lb_listener" "backend" {
   }
 }
 
-resource "aws_lb_listener_rule" "backend_http" {
-  count = var.acm_certificate_arn == "" ? 1 : 0
-
-  listener_arn = aws_lb_listener.http[0].arn
-  priority     = 10
-
-  action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.backend.arn
-  }
-
-  condition {
-    path_pattern {
-      values = ["/api/*", "/docs", "/openapi.json"]
-    }
-  }
-}
-
-resource "aws_lb_listener_rule" "backend_https" {
-  count = var.acm_certificate_arn != "" ? 1 : 0
-
-  listener_arn = aws_lb_listener.https[0].arn
-  priority     = 10
-
-  action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.backend.arn
-  }
-
-  condition {
-    path_pattern {
-      values = ["/api/*", "/docs", "/openapi.json"]
-    }
-  }
-}
-
 resource "aws_apigatewayv2_vpc_link" "backend" {
   name               = "${local.name}-backend"
   security_group_ids = [aws_security_group.api_gateway_link.id]
@@ -691,6 +659,21 @@ resource "aws_apigatewayv2_stage" "default" {
   api_id      = aws_apigatewayv2_api.backend.id
   name        = "$default"
   auto_deploy = true
+
+  access_log_settings {
+    destination_arn = aws_cloudwatch_log_group.api_gateway.arn
+    format = jsonencode({
+      requestId      = "$context.requestId"
+      ip             = "$context.identity.sourceIp"
+      requestTime    = "$context.requestTime"
+      httpMethod     = "$context.httpMethod"
+      routeKey       = "$context.routeKey"
+      status         = "$context.status"
+      protocol       = "$context.protocol"
+      responseLength = "$context.responseLength"
+      integrationErr = "$context.integrationErrorMessage"
+    })
+  }
 
   default_route_settings {
     throttling_burst_limit = var.api_throttle_burst_limit
@@ -1018,6 +1001,54 @@ resource "aws_ecs_service" "frontend" {
     aws_lb_listener.http,
     aws_lb_listener.https
   ]
+}
+
+resource "aws_appautoscaling_target" "backend" {
+  max_capacity       = var.backend_max_count
+  min_capacity       = var.backend_min_count
+  resource_id        = "service/${aws_ecs_cluster.this.name}/${aws_ecs_service.backend.name}"
+  scalable_dimension = "ecs:service:DesiredCount"
+  service_namespace  = "ecs"
+}
+
+resource "aws_appautoscaling_policy" "backend_cpu" {
+  name               = "${local.name}-backend-cpu"
+  policy_type        = "TargetTrackingScaling"
+  resource_id        = aws_appautoscaling_target.backend.resource_id
+  scalable_dimension = aws_appautoscaling_target.backend.scalable_dimension
+  service_namespace  = aws_appautoscaling_target.backend.service_namespace
+
+  target_tracking_scaling_policy_configuration {
+    target_value = var.ecs_cpu_target_value
+
+    predefined_metric_specification {
+      predefined_metric_type = "ECSServiceAverageCPUUtilization"
+    }
+  }
+}
+
+resource "aws_appautoscaling_target" "frontend" {
+  max_capacity       = var.frontend_max_count
+  min_capacity       = var.frontend_min_count
+  resource_id        = "service/${aws_ecs_cluster.this.name}/${aws_ecs_service.frontend.name}"
+  scalable_dimension = "ecs:service:DesiredCount"
+  service_namespace  = "ecs"
+}
+
+resource "aws_appautoscaling_policy" "frontend_cpu" {
+  name               = "${local.name}-frontend-cpu"
+  policy_type        = "TargetTrackingScaling"
+  resource_id        = aws_appautoscaling_target.frontend.resource_id
+  scalable_dimension = aws_appautoscaling_target.frontend.scalable_dimension
+  service_namespace  = aws_appautoscaling_target.frontend.service_namespace
+
+  target_tracking_scaling_policy_configuration {
+    target_value = var.ecs_cpu_target_value
+
+    predefined_metric_specification {
+      predefined_metric_type = "ECSServiceAverageCPUUtilization"
+    }
+  }
 }
 
 data "aws_iam_policy_document" "github_oidc_assume_role" {

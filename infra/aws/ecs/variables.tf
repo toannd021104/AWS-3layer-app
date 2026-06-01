@@ -109,10 +109,40 @@ variable "backend_desired_count" {
   default     = 2
 }
 
+variable "backend_min_count" {
+  description = "Minimum number of backend ECS tasks for autoscaling."
+  type        = number
+  default     = 2
+}
+
+variable "backend_max_count" {
+  description = "Maximum number of backend ECS tasks for autoscaling."
+  type        = number
+  default     = 6
+}
+
 variable "frontend_desired_count" {
   description = "Desired number of frontend ECS tasks."
   type        = number
   default     = 2
+}
+
+variable "frontend_min_count" {
+  description = "Minimum number of frontend ECS tasks for autoscaling."
+  type        = number
+  default     = 2
+}
+
+variable "frontend_max_count" {
+  description = "Maximum number of frontend ECS tasks for autoscaling."
+  type        = number
+  default     = 6
+}
+
+variable "ecs_cpu_target_value" {
+  description = "Target average ECS service CPU utilization percentage."
+  type        = number
+  default     = 60
 }
 
 variable "postgres_db" {

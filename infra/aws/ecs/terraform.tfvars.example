@@ -1,0 +1,36 @@
+aws_region   = "ap-southeast-1"
+project_name = "fastapi-ecs"
+environment  = "dev"
+
+# Optional. Set these for a business domain and HTTPS on the frontend ALB.
+domain_name         = ""
+acm_certificate_arn = ""
+
+# The GitHub Actions deploy workflow passes real ECR image URIs at deploy time.
+backend_image  = "public.ecr.aws/docker/library/nginx:1"
+frontend_image = "public.ecr.aws/docker/library/nginx:1"
+
+postgres_db                  = "app"
+postgres_user                = "app"
+postgres_instance_class      = "db.t4g.micro"
+postgres_multi_az            = false
+postgres_deletion_protection = false
+
+backend_desired_count  = 2
+backend_min_count      = 2
+backend_max_count      = 6
+frontend_desired_count = 2
+frontend_min_count     = 2
+frontend_max_count     = 6
+ecs_cpu_target_value   = 60
+
+first_superuser = "admin@example.com"
+
+# Set to owner/repo to create the OIDC role used by GitHub Actions.
+github_repository = "your-org/your-repo"
+github_branch     = "master"
+
+tags = {
+  Owner      = "platform"
+  CostCenter = "engineering"
+}

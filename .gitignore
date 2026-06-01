@@ -1,5 +1,11 @@
 .vscode/*
 !.vscode/extensions.json
+.env
+frontend/.env
+.terraform/
+*.tfstate
+*.tfstate.*
+terraform.tfvars
 node_modules/
 /test-results/
 /playwright-report/
