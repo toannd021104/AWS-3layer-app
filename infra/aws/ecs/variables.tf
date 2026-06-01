@@ -27,6 +27,24 @@ variable "vpc_cidr_block" {
   default     = "10.40.0.0/16"
 }
 
+variable "existing_vpc_id" {
+  description = "Optional existing VPC ID. When set, Terraform reuses existing subnets instead of creating VPC networking."
+  type        = string
+  default     = ""
+}
+
+variable "existing_public_subnet_ids" {
+  description = "Public subnet IDs to reuse when existing_vpc_id is set."
+  type        = list(string)
+  default     = []
+}
+
+variable "existing_private_subnet_ids" {
+  description = "Private subnet IDs to reuse when existing_vpc_id is set."
+  type        = list(string)
+  default     = []
+}
+
 variable "public_subnet_cidr_blocks" {
   description = "CIDR blocks for public ALB subnets."
   type        = list(string)

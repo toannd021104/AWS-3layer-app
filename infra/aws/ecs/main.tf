@@ -16,7 +16,8 @@ data "aws_iam_policy_document" "ecs_tasks_assume_role" {
 }
 
 locals {
-  name = "${var.project_name}-${var.environment}"
+  name           = "${var.project_name}-${var.environment}"
+  create_network = var.existing_vpc_id == ""
 
   common_tags = merge(
     {
@@ -27,8 +28,11 @@ locals {
     var.tags
   )
 
-  frontend_origin = var.acm_certificate_arn != "" ? "https://${local.public_host}" : "http://${local.public_host}"
-  public_host     = var.domain_name != "" ? var.domain_name : aws_lb.frontend.dns_name
+  frontend_origin    = var.acm_certificate_arn != "" ? "https://${local.public_host}" : "http://${local.public_host}"
+  public_host        = var.domain_name != "" ? var.domain_name : aws_lb.frontend.dns_name
+  vpc_id             = local.create_network ? aws_vpc.this[0].id : var.existing_vpc_id
+  public_subnet_ids  = local.create_network ? aws_subnet.public[*].id : var.existing_public_subnet_ids
+  private_subnet_ids = local.create_network ? aws_subnet.private[*].id : var.existing_private_subnet_ids
 
   backend_secret_keys = [
     "DOMAIN",
@@ -67,6 +71,8 @@ resource "random_password" "secret_key" {
 }
 
 resource "aws_vpc" "this" {
+  count = local.create_network ? 1 : 0
+
   cidr_block           = var.vpc_cidr_block
   enable_dns_hostnames = true
   enable_dns_support   = true
@@ -77,7 +83,9 @@ resource "aws_vpc" "this" {
 }
 
 resource "aws_internet_gateway" "this" {
-  vpc_id = aws_vpc.this.id
+  count = local.create_network ? 1 : 0
+
+  vpc_id = aws_vpc.this[0].id
 
   tags = merge(local.common_tags, {
     Name = "${local.name}-igw"
@@ -85,9 +93,9 @@ resource "aws_internet_gateway" "this" {
 }
 
 resource "aws_subnet" "public" {
-  count = length(var.public_subnet_cidr_blocks)
+  count = local.create_network ? length(var.public_subnet_cidr_blocks) : 0
 
-  vpc_id                  = aws_vpc.this.id
+  vpc_id                  = aws_vpc.this[0].id
   cidr_block              = var.public_subnet_cidr_blocks[count.index]
   availability_zone       = data.aws_availability_zones.available.names[count.index]
   map_public_ip_on_launch = true
@@ -99,9 +107,9 @@ resource "aws_subnet" "public" {
 }
 
 resource "aws_subnet" "private" {
-  count = length(var.private_subnet_cidr_blocks)
+  count = local.create_network ? length(var.private_subnet_cidr_blocks) : 0
 
-  vpc_id            = aws_vpc.this.id
+  vpc_id            = aws_vpc.this[0].id
   cidr_block        = var.private_subnet_cidr_blocks[count.index]
   availability_zone = data.aws_availability_zones.available.names[count.index]
 
@@ -112,11 +120,13 @@ resource "aws_subnet" "private" {
 }
 
 resource "aws_route_table" "public" {
-  vpc_id = aws_vpc.this.id
+  count = local.create_network ? 1 : 0
+
+  vpc_id = aws_vpc.this[0].id
 
   route {
     cidr_block = "0.0.0.0/0"
-    gateway_id = aws_internet_gateway.this.id
+    gateway_id = aws_internet_gateway.this[0].id
   }
 
   tags = merge(local.common_tags, {
@@ -128,11 +138,11 @@ resource "aws_route_table_association" "public" {
   count = length(aws_subnet.public)
 
   subnet_id      = aws_subnet.public[count.index].id
-  route_table_id = aws_route_table.public.id
+  route_table_id = aws_route_table.public[0].id
 }
 
 resource "aws_eip" "nat" {
-  count = length(aws_subnet.public)
+  count = local.create_network ? length(aws_subnet.public) : 0
 
   domain = "vpc"
 
@@ -140,11 +150,11 @@ resource "aws_eip" "nat" {
     Name = "${local.name}-nat-eip-${count.index + 1}"
   })
 
-  depends_on = [aws_internet_gateway.this]
+  depends_on = [aws_internet_gateway.this[0]]
 }
 
 resource "aws_nat_gateway" "this" {
-  count = length(aws_subnet.public)
+  count = local.create_network ? length(aws_subnet.public) : 0
 
   allocation_id = aws_eip.nat[count.index].id
   subnet_id     = aws_subnet.public[count.index].id
@@ -153,13 +163,13 @@ resource "aws_nat_gateway" "this" {
     Name = "${local.name}-nat-${count.index + 1}"
   })
 
-  depends_on = [aws_internet_gateway.this]
+  depends_on = [aws_internet_gateway.this[0]]
 }
 
 resource "aws_route_table" "private" {
-  count = length(aws_subnet.private)
+  count = local.create_network ? length(aws_subnet.private) : 0
 
-  vpc_id = aws_vpc.this.id
+  vpc_id = aws_vpc.this[0].id
 
   route {
     cidr_block     = "0.0.0.0/0"
@@ -181,7 +191,7 @@ resource "aws_route_table_association" "private" {
 resource "aws_security_group" "frontend_alb" {
   name        = "${local.name}-frontend-alb"
   description = "Public frontend ALB ingress"
-  vpc_id      = aws_vpc.this.id
+  vpc_id      = local.vpc_id
 
   ingress {
     description = "HTTP"
@@ -215,7 +225,7 @@ resource "aws_security_group" "frontend_alb" {
 resource "aws_security_group" "api_gateway_link" {
   name        = "${local.name}-apigw-link"
   description = "API Gateway VPC Link"
-  vpc_id      = aws_vpc.this.id
+  vpc_id      = local.vpc_id
 
   egress {
     description = "Backend ALB"
@@ -233,7 +243,7 @@ resource "aws_security_group" "api_gateway_link" {
 resource "aws_security_group" "backend_alb" {
   name        = "${local.name}-backend-alb"
   description = "Internal backend ALB"
-  vpc_id      = aws_vpc.this.id
+  vpc_id      = local.vpc_id
 
   ingress {
     description     = "API Gateway VPC Link"
@@ -259,7 +269,7 @@ resource "aws_security_group" "backend_alb" {
 resource "aws_security_group" "frontend" {
   name        = "${local.name}-frontend"
   description = "Frontend ECS service"
-  vpc_id      = aws_vpc.this.id
+  vpc_id      = local.vpc_id
 
   ingress {
     description     = "Frontend from ALB"
@@ -285,7 +295,7 @@ resource "aws_security_group" "frontend" {
 resource "aws_security_group" "backend" {
   name        = "${local.name}-backend"
   description = "Backend ECS service"
-  vpc_id      = aws_vpc.this.id
+  vpc_id      = local.vpc_id
 
   ingress {
     description     = "Backend from internal ALB"
@@ -311,7 +321,7 @@ resource "aws_security_group" "backend" {
 resource "aws_security_group" "database" {
   name        = "${local.name}-database"
   description = "RDS PostgreSQL"
-  vpc_id      = aws_vpc.this.id
+  vpc_id      = local.vpc_id
 
   ingress {
     description     = "PostgreSQL from backend"
@@ -387,7 +397,7 @@ resource "aws_cloudwatch_log_group" "api_gateway" {
 
 resource "aws_db_subnet_group" "this" {
   name       = "${local.name}-db"
-  subnet_ids = aws_subnet.private[*].id
+  subnet_ids = local.private_subnet_ids
 
   tags = merge(local.common_tags, {
     Name = "${local.name}-db-subnets"
@@ -505,7 +515,7 @@ resource "aws_lb" "frontend" {
   internal           = false
   load_balancer_type = "application"
   security_groups    = [aws_security_group.frontend_alb.id]
-  subnets            = aws_subnet.public[*].id
+  subnets            = local.public_subnet_ids
 
   tags = local.common_tags
 }
@@ -515,7 +525,7 @@ resource "aws_lb" "backend" {
   internal           = true
   load_balancer_type = "application"
   security_groups    = [aws_security_group.backend_alb.id]
-  subnets            = aws_subnet.private[*].id
+  subnets            = local.private_subnet_ids
 
   tags = local.common_tags
 }
@@ -525,7 +535,7 @@ resource "aws_lb_target_group" "frontend" {
   port        = 80
   protocol    = "HTTP"
   target_type = "ip"
-  vpc_id      = aws_vpc.this.id
+  vpc_id      = local.vpc_id
 
   health_check {
     enabled             = true
@@ -545,7 +555,7 @@ resource "aws_lb_target_group" "backend" {
   port        = 8000
   protocol    = "HTTP"
   target_type = "ip"
-  vpc_id      = aws_vpc.this.id
+  vpc_id      = local.vpc_id
 
   health_check {
     enabled             = true
@@ -620,7 +630,7 @@ resource "aws_lb_listener" "backend" {
 resource "aws_apigatewayv2_vpc_link" "backend" {
   name               = "${local.name}-backend"
   security_group_ids = [aws_security_group.api_gateway_link.id]
-  subnet_ids         = aws_subnet.private[*].id
+  subnet_ids         = local.private_subnet_ids
 
   tags = local.common_tags
 }
@@ -961,7 +971,7 @@ resource "aws_ecs_service" "backend" {
   network_configuration {
     assign_public_ip = false
     security_groups  = [aws_security_group.backend.id]
-    subnets          = aws_subnet.private[*].id
+    subnets          = local.private_subnet_ids
   }
 
   tags = local.common_tags
@@ -992,7 +1002,7 @@ resource "aws_ecs_service" "frontend" {
   network_configuration {
     assign_public_ip = false
     security_groups  = [aws_security_group.frontend.id]
-    subnets          = aws_subnet.private[*].id
+    subnets          = local.private_subnet_ids
   }
 
   tags = local.common_tags
