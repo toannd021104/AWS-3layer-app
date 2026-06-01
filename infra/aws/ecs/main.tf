@@ -564,7 +564,7 @@ resource "aws_lb" "frontend" {
 }
 
 resource "aws_lb" "backend" {
-  name               = "${local.name}-backend"
+  name               = "${local.name}-backend-nlb"
   internal           = true
   load_balancer_type = "network"
   subnets            = local.private_subnet_ids
