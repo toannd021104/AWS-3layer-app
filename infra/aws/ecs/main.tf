@@ -1,5 +1,10 @@
 data "aws_availability_zones" "available" {
   state = "available"
+
+  filter {
+    name   = "zone-type"
+    values = ["availability-zone"]
+  }
 }
 
 data "aws_caller_identity" "current" {}
@@ -33,6 +38,7 @@ locals {
   vpc_id             = local.create_network ? aws_vpc.this[0].id : var.existing_vpc_id
   public_subnet_ids  = local.create_network ? aws_subnet.public[*].id : var.existing_public_subnet_ids
   private_subnet_ids = local.create_network ? aws_subnet.private[*].id : var.existing_private_subnet_ids
+  iam_name_prefix    = "${local.name}-${var.aws_region}"
 
   backend_secret_keys = [
     "DOMAIN",
@@ -474,7 +480,7 @@ resource "aws_ecs_cluster" "this" {
 }
 
 resource "aws_iam_role" "ecs_task_execution" {
-  name               = "${local.name}-ecs-execution"
+  name               = "${local.iam_name_prefix}-ecs-execution"
   assume_role_policy = data.aws_iam_policy_document.ecs_tasks_assume_role.json
 
   tags = local.common_tags
@@ -486,7 +492,7 @@ resource "aws_iam_role_policy_attachment" "ecs_task_execution" {
 }
 
 resource "aws_iam_role_policy" "ecs_task_execution_secrets" {
-  name = "${local.name}-ecs-execution-secrets"
+  name = "${local.iam_name_prefix}-ecs-execution-secrets"
   role = aws_iam_role.ecs_task_execution.id
 
   policy = jsonencode({
@@ -504,7 +510,7 @@ resource "aws_iam_role_policy" "ecs_task_execution_secrets" {
 }
 
 resource "aws_iam_role" "ecs_task" {
-  name               = "${local.name}-ecs-task"
+  name               = "${local.iam_name_prefix}-ecs-task"
   assume_role_policy = data.aws_iam_policy_document.ecs_tasks_assume_role.json
 
   tags = local.common_tags
