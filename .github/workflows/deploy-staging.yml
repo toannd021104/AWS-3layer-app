@@ -11,7 +11,7 @@ jobs:
   deploy:
     environment: staging
     # Do not deploy in the main repository, only in user projects
-    if: github.repository_owner != 'fastapi'
+    if: vars.ENABLE_COMPOSE_STAGING_DEPLOY == 'true' && github.repository_owner != 'fastapi'
     runs-on:
       - self-hosted
       - staging

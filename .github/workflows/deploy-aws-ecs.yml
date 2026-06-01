@@ -14,10 +14,11 @@ env:
   TERRAFORM_DIR: infra/aws/ecs
   TF_PROJECT_NAME: ${{ vars.TF_PROJECT_NAME || 'fastapi-ecs' }}
   TF_ENVIRONMENT: ${{ vars.TF_ENVIRONMENT || 'dev' }}
-  AWS_REGION: ${{ vars.AWS_REGION || 'ap-southeast-1' }}
+  AWS_REGION: ${{ vars.AWS_REGION || 'ap-southeast-2' }}
 
 jobs:
   deploy:
+    if: vars.ENABLE_AWS_ECS_DEPLOY == 'true' && vars.AWS_ROLE_ARN != ''
     runs-on: ubuntu-latest
     timeout-minutes: 60
 
